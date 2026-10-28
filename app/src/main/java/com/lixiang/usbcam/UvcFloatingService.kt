@@ -234,7 +234,7 @@ class UvcFloatingService : Service() {
         brightnessPanel?.addView(rowBright)
         brightnessPanel?.addView(rowGain)
 
-        // Контейнер видео с жесткой минимальной высотой (чтобы не схлопывался в полоску при отключении кабинного штекера)
+        // Контейнер видео с жесткой минимальной высотой (предотвращает схлопывание в полоску)
         val videoContainer = FrameLayout(displayContext).apply {
             setBackgroundColor(Color.BLACK)
             minimumHeight = 400
@@ -313,8 +313,6 @@ class UvcFloatingService : Service() {
     private fun applyCameraLightSettings(brightnessPercent: Int, gainPercent: Int) {
         try {
             val ctrl = cameraHelper?.uvcControl ?: return
-            try { ctrl.isAutoExposurePriority = true } catch (_: Exception) {}
-            try { ctrl.backlightCompPercent = 100 } catch (_: Exception) {}
             try { ctrl.brightnessPercent = brightnessPercent } catch (_: Exception) {}
             try { ctrl.gainPercent = gainPercent } catch (_: Exception) {}
         } catch (_: Exception) {}
