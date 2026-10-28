@@ -155,16 +155,16 @@ class UvcFloatingService : Service() {
             brightnessPanel?.visibility = if (isBrightnessVisible) View.VISIBLE else View.GONE
         }
         
-        val btnHMirror = createControlButton(displayContext, if (isHorizMirrored) "Зерк. Гор [✓]" else "Зерк. Гор") {
+        val btnHMirror = createControlButton(displayContext, if (isHorizMirrored) "Зерк. Гор [✓]" else "Зерк. Гор") { btn ->
             isHorizMirrored = !isHorizMirrored
             surfaceView?.scaleX = if (isHorizMirrored) -1f else 1f
-            it.text = if (isHorizMirrored) "Зерк. Гор [✓]" else "Зерк. Гор"
+            btn.text = if (isHorizMirrored) "Зерк. Гор [✓]" else "Зерк. Гор"
         }
 
-        val btnVMirror = createControlButton(displayContext, if (isVertMirrored) "Зерк. Верт [✓]" else "Зерк. Верт") {
+        val btnVMirror = createControlButton(displayContext, if (isVertMirrored) "Зерк. Верт [✓]" else "Зерк. Верт") { btn ->
             isVertMirrored = !isVertMirrored
             surfaceView?.scaleY = if (isVertMirrored) -1f else 1f
-            it.text = if (isVertMirrored) "Зерк. Верт [✓]" else "Зерк. Верт"
+            btn.text = if (isVertMirrored) "Зерк. Верт [✓]" else "Зерк. Верт"
         }
 
         val btnSwitchScreen = createControlButton(displayContext, "⇄ Экран") {
@@ -306,8 +306,9 @@ class UvcFloatingService : Service() {
         } catch (_: Exception) {}
     }
 
-    private fun createControlButton(ctx: Context, title: String, onClick: () -> Unit): Button {
-        return Button(ctx).apply {
+    private fun createControlButton(ctx: Context, title: String, onClick: (Button) -> Unit): Button {
+        val btn = Button(ctx)
+        btn.apply {
             text = title
             textSize = 13f
             setTextColor(Color.WHITE)
@@ -316,8 +317,9 @@ class UvcFloatingService : Service() {
             lp.setMargins(4, 4, 4, 4)
             layoutParams = lp
             setPadding(12, 0, 12, 0)
-            setOnClickListener { onClick() }
+            setOnClickListener { onClick(btn) }
         }
+        return btn
     }
 
     private fun switchMonitor() {
