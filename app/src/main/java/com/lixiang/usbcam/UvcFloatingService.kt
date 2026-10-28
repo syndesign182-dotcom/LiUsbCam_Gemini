@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Point
 import android.hardware.display.DisplayManager
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
@@ -26,6 +27,7 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
@@ -43,14 +45,15 @@ class UvcFloatingService : Service() {
     private var statusText: TextView? = null
     private var brightnessPanel: LinearLayout? = null
     private var seekBrightness: SeekBar? = null
-    private var seekGain: SeekBar? = null
     private lateinit var windowParams: WindowManager.LayoutParams
 
     private var cameraHelper: ICameraHelper? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private var isExpanded = false
+    private var sizeState = 0 
     private var isBrightnessVisible = false
+    private var isHorizMirrored = false
+    private var isVertMirrored = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -98,8 +101,14 @@ class UvcFloatingService : Service() {
         val displayContext = createDisplayContext(targetDisplay)
         currentWindowManager = displayContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
-        val width = if (isExpanded) 1280 else 780
-        val height = if (isExpanded) 780 else 500
+        val size = Point()
+        targetDisplay.getRealSize(size)
+
+        val (width, height) = when (sizeState) {
+            0 -> Pair(640, 380)
+            1 -> Pair(960, 580)
+            else -> Pair(size.x, size.y)
+        }
 
         windowParams = WindowManager.LayoutParams(
             width,
@@ -111,46 +120,67 @@ class UvcFloatingService : Service() {
             PixelFormat.RGBA_8888
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 120
-            y = 120
+            x = if (sizeState == 2) 0 else 100
+            y = if (sizeState == 2) 0 else 100
         }
 
         rootLayout = LinearLayout(displayContext).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#FF1A1A1A"))
-            setPadding(4, 4, 4, 4)
+            setPadding(2, 2, 2, 2)
         }
 
-        // Верхняя панель кнопок
+        val scrollBar = HorizontalScrollView(displayContext).apply {
+            isFillViewport = true
+            setBackgroundColor(Color.parseColor("#FF2C2C2C"))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 70)
+        }
+
         val controlBar = LinearLayout(displayContext).apply {
             orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(Color.parseColor("#FF2C2C2C"))
             gravity = Gravity.CENTER_VERTICAL or Gravity.END
-            setPadding(12, 0, 12, 0)
+            setPadding(10, 0, 10, 0)
         }
 
         val titleLabel = TextView(displayContext).apply {
-            text = "Камера (Экран ${currentDisplayIndex + 1})"
-            textSize = 15f
+            text = " Камера (Экран ${currentDisplayIndex + 1})"
+            textSize = 14f
             setTextColor(Color.LTGRAY)
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
         }
 
-        val btnLight = createControlButton(displayContext, "☀ Свет") {
+        val btnLight = createControlButton(displayContext, "☀ Яркость") {
             isBrightnessVisible = !isBrightnessVisible
             brightnessPanel?.visibility = if (isBrightnessVisible) View.VISIBLE else View.GONE
         }
+        
+        val btnHMirror = createControlButton(displayContext, if (isHorizMirrored) "Зерк. Гор [✓]" else "Зерк. Гор") {
+            isHorizMirrored = !isHorizMirrored
+            surfaceView?.scaleX = if (isHorizMirrored) -1f else 1f
+            it.text = if (isHorizMirrored) "Зерк. Гор [✓]" else "Зерк. Гор"
+        }
+
+        val btnVMirror = createControlButton(displayContext, if (isVertMirrored) "Зерк. Верт [✓]" else "Зерк. Верт") {
+            isVertMirrored = !isVertMirrored
+            surfaceView?.scaleY = if (isVertMirrored) -1f else 1f
+            it.text = if (isVertMirrored) "Зерк. Верт [✓]" else "Зерк. Верт"
+        }
+
         val btnSwitchScreen = createControlButton(displayContext, "⇄ Экран") {
             switchMonitor()
         }
-        val btnReconnect = createControlButton(displayContext, "↻") {
+        val btnReconnect = createControlButton(displayContext, "↻ Сброс") {
             checkAndConnectUsbDevice()
         }
-        val btnResize = createControlButton(displayContext, "Размер") {
-            isExpanded = !isExpanded
-            windowParams.width = if (isExpanded) 1280 else 780
-            windowParams.height = if (isExpanded) 780 else 500
-            currentWindowManager?.updateViewLayout(rootLayout, windowParams)
+        val sizeTitle = when(sizeState) {
+            0 -> "📏 Размер: Мал"
+            1 -> "📏 Размер: Сред"
+            else -> "📏 Размер: Полн"
+        }
+        val btnResize = createControlButton(displayContext, sizeTitle) {
+            sizeState = (sizeState + 1) % 3
+            attachWindowToDisplay(targetDisplay)
         }
         val btnClose = createControlButton(displayContext, "✕") {
             stopSelf()
@@ -158,31 +188,27 @@ class UvcFloatingService : Service() {
 
         controlBar.addView(titleLabel)
         controlBar.addView(btnLight)
+        controlBar.addView(btnHMirror)
+        controlBar.addView(btnVMirror)
         controlBar.addView(btnSwitchScreen)
         controlBar.addView(btnReconnect)
         controlBar.addView(btnResize)
         controlBar.addView(btnClose)
+        scrollBar.addView(controlBar)
 
-        // Панель регулировки яркости и ISO
         brightnessPanel = LinearLayout(displayContext).apply {
-            orientation = LinearLayout.VERTICAL
+            orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(Color.parseColor("#DD222222"))
-            setPadding(24, 12, 24, 12)
+            setPadding(20, 10, 20, 10)
+            gravity = Gravity.CENTER_VERTICAL
             visibility = if (isBrightnessVisible) View.VISIBLE else View.GONE
         }
 
-        val savedBrightness = prefs.getInt("brightness", 80)
-        val savedGain = prefs.getInt("gain", 85)
-
-        val rowBright = LinearLayout(displayContext).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
+        val savedBrightness = prefs.getInt("brightness", 75)
         val lblBright = TextView(displayContext).apply {
-            text = "Яркость:"
-            textSize = 14f
+            text = "Яркость: "
+            textSize = 13f
             setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(150, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         seekBrightness = SeekBar(displayContext).apply {
             max = 100
@@ -192,55 +218,24 @@ class UvcFloatingService : Service() {
                 override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                     if (fromUser) {
                         prefs.edit().putInt("brightness", progress).apply()
-                        applyCameraLightSettings(progress, seekGain?.progress ?: savedGain)
+                        applyBrightness(progress)
                     }
                 }
                 override fun onStartTrackingTouch(seekBar: SeekBar?) {}
                 override fun onStopTrackingTouch(seekBar: SeekBar?) {}
             })
         }
-        rowBright.addView(lblBright)
-        rowBright.addView(seekBrightness)
+        brightnessPanel?.addView(lblBright)
+        brightnessPanel?.addView(seekBrightness)
 
-        val rowGain = LinearLayout(displayContext).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 8, 0, 0)
-        }
-        val lblGain = TextView(displayContext).apply {
-            text = "Ночь (ISO):"
-            textSize = 14f
-            setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(150, ViewGroup.LayoutParams.WRAP_CONTENT)
-        }
-        seekGain = SeekBar(displayContext).apply {
-            max = 100
-            progress = savedGain
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    if (fromUser) {
-                        prefs.edit().putInt("gain", progress).apply()
-                        applyCameraLightSettings(seekBrightness?.progress ?: savedBrightness, progress)
-                    }
-                }
-                override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-                override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-            })
-        }
-        rowGain.addView(lblGain)
-        rowGain.addView(seekGain)
-
-        brightnessPanel?.addView(rowBright)
-        brightnessPanel?.addView(rowGain)
-
-        // Контейнер видео с жесткой минимальной высотой (предотвращает схлопывание в полоску)
         val videoContainer = FrameLayout(displayContext).apply {
             setBackgroundColor(Color.BLACK)
-            minimumHeight = 400
+            minimumHeight = 300
         }
 
         surfaceView = SurfaceView(displayContext).apply {
+            scaleX = if (isHorizMirrored) -1f else 1f
+            scaleY = if (isVertMirrored) -1f else 1f
             holder.addCallback(object : SurfaceHolder.Callback {
                 override fun surfaceCreated(holder: SurfaceHolder) {
                     cameraHelper?.addSurface(holder.surface, false)
@@ -253,8 +248,8 @@ class UvcFloatingService : Service() {
         }
 
         statusText = TextView(displayContext).apply {
-            text = "Поиск USB-камеры..."
-            textSize = 18f
+            text = "Подключение камеры..."
+            textSize = 16f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             setBackgroundColor(Color.parseColor("#AA000000"))
@@ -273,61 +268,54 @@ class UvcFloatingService : Service() {
             FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP)
         )
 
-        rootLayout?.addView(
-            controlBar,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 80)
-        )
-        rootLayout?.addView(
-            videoContainer,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
-        )
+        rootLayout?.addView(scrollBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 70))
+        rootLayout?.addView(videoContainer, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
-        // Перетаскивание окна за шапку
-        var initialX = 0
-        var initialY = 0
-        var touchX = 0f
-        var touchY = 0f
+        if (sizeState != 2) {
+            var initialX = 0
+            var initialY = 0
+            var touchX = 0f
+            var touchY = 0f
 
-        controlBar.setOnTouchListener { _, event ->
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    initialX = windowParams.x
-                    initialY = windowParams.y
-                    touchX = event.rawX
-                    touchY = event.rawY
-                    true
+            scrollBar.setOnTouchListener { _, event ->
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        initialX = windowParams.x
+                        initialY = windowParams.y
+                        touchX = event.rawX
+                        touchY = event.rawY
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        windowParams.x = initialX + (event.rawX - touchX).toInt()
+                        windowParams.y = initialY + (event.rawY - touchY).toInt()
+                        currentWindowManager?.updateViewLayout(rootLayout, windowParams)
+                        true
+                    }
+                    else -> false
                 }
-                MotionEvent.ACTION_MOVE -> {
-                    windowParams.x = initialX + (event.rawX - touchX).toInt()
-                    windowParams.y = initialY + (event.rawY - touchY).toInt()
-                    currentWindowManager?.updateViewLayout(rootLayout, windowParams)
-                    true
-                }
-                else -> false
             }
         }
 
         currentWindowManager?.addView(rootLayout, windowParams)
     }
 
-    private fun applyCameraLightSettings(brightnessPercent: Int, gainPercent: Int) {
+    private fun applyBrightness(brightnessPercent: Int) {
         try {
-            val ctrl = cameraHelper?.uvcControl ?: return
-            try { ctrl.brightnessPercent = brightnessPercent } catch (_: Exception) {}
-            try { ctrl.gainPercent = gainPercent } catch (_: Exception) {}
+            cameraHelper?.uvcControl?.brightnessPercent = brightnessPercent
         } catch (_: Exception) {}
     }
 
     private fun createControlButton(ctx: Context, title: String, onClick: () -> Unit): Button {
         return Button(ctx).apply {
             text = title
-            textSize = 14f
+            textSize = 13f
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.parseColor("#FF444444"))
-            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, 64)
-            lp.setMargins(6, 8, 6, 8)
+            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, 54)
+            lp.setMargins(4, 4, 4, 4)
             layoutParams = lp
-            setPadding(16, 0, 16, 0)
+            setPadding(12, 0, 12, 0)
             setOnClickListener { onClick() }
         }
     }
@@ -346,15 +334,15 @@ class UvcFloatingService : Service() {
         val usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
         val deviceList = usbManager.deviceList
         if (deviceList.isEmpty()) {
-            updateStatus("USB-устройства не найдены.\nПроверьте порт в подлокотнике!", false)
+            updateStatus("Камера не найдена в USB-порту!", false)
             return
         }
         val list = cameraHelper?.deviceList
         if (!list.isNullOrEmpty()) {
-            updateStatus("Подключение к ${list[0].productName ?: "USB-камере"}...", false)
+            updateStatus("Подключение...", false)
             cameraHelper?.selectDevice(list[0])
         } else {
-            updateStatus("Найдено USB (${deviceList.size}), но не UVC-камера", false)
+            updateStatus("USB устройство не UVC", false)
         }
     }
 
@@ -362,12 +350,12 @@ class UvcFloatingService : Service() {
         cameraHelper = CameraHelper().apply {
             setStateCallback(object : ICameraHelper.StateCallback {
                 override fun onAttach(device: UsbDevice?) {
-                    updateStatus("Камера подключена, запрос прав...", false)
+                    updateStatus("Запрос прав USB...", false)
                     device?.let { selectDevice(it) }
                 }
 
                 override fun onDeviceOpen(device: UsbDevice?, isFirstOpen: Boolean) {
-                    updateStatus("Открытие видеопотока...", false)
+                    updateStatus("Инициализация...", false)
                     openCamera()
                 }
 
@@ -379,10 +367,9 @@ class UvcFloatingService : Service() {
                     updateStatus("", true)
 
                     mainHandler.postDelayed({
-                        val b = prefs.getInt("brightness", 80)
-                        val g = prefs.getInt("gain", 85)
-                        applyCameraLightSettings(b, g)
-                    }, 300)
+                        val b = prefs.getInt("brightness", 75)
+                        applyBrightness(b)
+                    }, 200)
                 }
 
                 override fun onCameraClose(device: UsbDevice?) {
@@ -392,10 +379,10 @@ class UvcFloatingService : Service() {
 
                 override fun onDeviceClose(device: UsbDevice?) {}
                 override fun onDetach(device: UsbDevice?) {
-                    updateStatus("Камера отключена от порта", false)
+                    updateStatus("Камера извлечена из порта", false)
                 }
                 override fun onCancel(device: UsbDevice?) {
-                    updateStatus("Нет прав доступа к USB (нажмите ↻)", false)
+                    updateStatus("Нет прав USB (нажмите ↻ Сброс)", false)
                 }
             })
         }
